@@ -1,0 +1,57 @@
+A lot of people buy the Raspberry Pi board and don't have a HDMI display to connect it to( In my case, I didn't want to buy a display till I was sure that I would make full use of it.) This setup without a display is called Headless.
+
+When using a headless RPi, one faces some peculiar problems which the normal users don't bother about. I am attempting to adress those problems here.
+I would suggest you to use the Raspbian OS on the RPi, before you start experimenting.  
+
+How do you check if the board is booting
+
+1. RPi has multiple LEDs by which we can confirm whether the board is booting or not. Red LED will be always on if the board is getting enough power, where as the Green LED starts blinking in quick succession initially when the board is powered. This indicates that the RPi is booting. Once the boot process is over the LED blinking will slow down.
+
+2. Connect  a ethernet cable to the board and you can see the ethernet ports powered and blinking. Now run nmap command as below to check the devices
+on your network. If you don't recognize any of the device connected, that's your RPi.
+You can ping to this device and check if it's running.
+
+rohit@home:~$ nmap -sn 192.168.1.0/24
+
+Starting Nmap 6.40 ( http://nmap.org ) at 2016-09-22 22:38 IST
+Nmap scan report for 192.168.1.1
+Host is up (0.0045s latency).
+Nmap scan report for 192.168.1.120
+Host is up (0.0072s latency).
+Nmap scan report for 192.168.1.132
+Host is up (0.047s latency).
+Nmap scan report for 192.168.1.148
+Host is up (0.000037s latency).
+Nmap done: 256 IP addresses (4 hosts up) scanned in 2.47 seconds
+
+Here the option -sn will make sure that no port scan is done, making the exploration task faster. 24 is the subnet mask.
+
+rohit@home:~$ ping 192.168.1.132
+PING 192.168.1.132 (192.168.1.132) 56(84) bytes of data.
+64 bytes from 192.168.1.132: icmp_seq=1 ttl=64 time=3.58 ms
+64 bytes from 192.168.1.132: icmp_seq=2 ttl=64 time=6.23 ms
+
+
+Using ssh on your RPi:
+By default Raspbian has a user named pi running which has a password raspberry. You can ssh the same user as below
+
+rohit@home:~$ ssh -Y pi@192.168.1.134
+
+Here using the option -Y enables X11 forwarding. Using X11 forwarding we can launch the graphical applications running on the pi.
+
+Using the serial console: 
+However, most of us may not be interested in accessing the Pi using the ssh always. There might be various reasons for this. sshd may not be running
+on the target Pi, or the user may not have a password(This doen't happen with Raspbian, this is the case with most of the custom built linuxes).
+
+Serial ports on RPi are made available on the GPIO header. The chip used on RPi uses 0 and 3.3V logic levels,not +/- 12V used by RS-232 serial ports.
+This voltage adjustment can be done using the RS-232 level converters which are availble online. These level converters can be built using MAX3232 ICs
+and some capacitors. I bought this level converter from a local electonic shop (If you are from Bangalore, a stroll in SP Road will fetch you
+everything you need.)
+Serial interface has to enabled on the board also. If the board is running Raspbian, run raspi-config on the ssh terminal and select Advanced options -> Enable/Disable Serial Console
+
+sudo raspi-config
+
+This will enable serial console of RPi. This would require a reboot to take effect. What this essentially does is to write enable_uart=1 at the end of
+the /boot/config.txt file.(We will have to directly write this in the /boot/config.txt if we are running a custom linux)
+Now run minicom (or any other serial console programm that you like). Set the serial device to /dev/ttyUSB0 and the baud rate to 115200, Flowcontrols
+set to No.

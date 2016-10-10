@@ -1,0 +1,133 @@
+There are various tools available online for building a bare minimum Linux filesystem for RPi. Two of most famous ones are Yocto and Buildroot. Yocto
+happens to be an industry standard. It is evolved from LTIB and is widely supported by the various corporations. However, it is complex tool which
+takes a lot of time to grasp. (Scalability is good and is apt for industry, because they can have dedicated Build Engineers)
+    Buildroot looks more familiar to Entry level Linux developers as it uses ncurses based menu and is easier to grasp.
+    First install all the necessary packages on your distro and download the buildroot package.
+    sudo apt-get install ncurses-dev git g++
+    git clone git://git.buildroot.net/buildroot
+
+    All the necessary packages that need to installed can be selected using a defconfig file. Run make raspberrypi3_defconfig. After this run make.
+    Please make sure that you have a good internet connection as this will download a lot of files. If the connection gets interrupted somehow, it can
+    lead to some peculiar problems which otherwise don't occur and are hard to debug. If you are facing any such problems, do a clean build with make
+    clean all
+
+This will take about an hour or two to build and the final images will be built at output/images. This can be flashed to the SD card as below.
+
+sudo umount /dev/sdX*
+sudo dd if=output/images/sdcard.img of=/dev/sdX
+
+    I would recommend booting and checking which all components are workings on your RPi. This will improve the learning curve. I am not sure on how this would come up on the display connected to the RPi, but if
+    you are using a headless RPi, then the only way to identify if your RPi is booting or not is with the help of LEDs. There is only one user on the
+    Linux that we just built, root, and it has passwordless login. Hence it is not possible to remotely log into the RPi using ssh.
+
+    In order to fix this we need to enable Serial console on the RPi. This can be done by adding enable_uart=1 to the end of the config.txt file in
+    the /boot/ folder on the target RPi. The resultant config.txt file will look something like this.
+
+    kernel=zImage
+
+# To use an external initramfs file
+#initramfs rootfs.cpio.gz
+
+# Disable overscan assuming the display supports displaying the full resolution
+# If the text shown on the screen disappears off the edge, comment this out
+disable_overscan=1
+
+# How much memory in MB to assign to the GPU on Pi models having
+# 256, 512 or 1024 MB total memory
+gpu_mem_256=100
+gpu_mem_512=100
+gpu_mem_1024=100
+
+enable_uart=1
+
+With this you will get the much needed console logs. Boot the RPi and play with it.
+
+Running ifconfig -a will show that WiFi interface is not listed.
+By default WiFi is not enabled on the RPi and with little effort we can get it up. Since the WiFi components come up a little late we need to modprobe
+the WiFi driver, namely brcmfmac, manually. A more sofisticated method would be using dynamic hardware configuration tools such as hotplug. Buildroot
+supports mdev and can be built into the filesystem by selecting "System Configurations" -> "/dev management" -> "Dynamic using Devtmpfs + mdev" under
+the make menuconfig menu. Now we need to set the hotplug helper as mdev and write /etc/mdev.conf file. Fortunately, the mdev package itself has some
+helper script for this and we can use them directly. Add the below lines to your post-build script located at board/raspberrypi3/post-build.sh
+
+cp package/busybox/S10mdev ${TARGET_DIR}/etc/init.d/S10mdev
+chmod 755 ${TARGET_DIR}/etc/init.d/S10mdev
+cp package/busybox/mdev.conf ${TARGET_DIR}/etc/mdev.conf
+
+Now do a make and run the newly built system.
+You can check whether mdev is set as the hotplug helper or not by running cat /proc/sys/kernel/hotplug.
+grep the dmesg to check for any brcmfmac related logs. On my RPi, I found this.
+
+[    3.888944] bcm2835-wdt 3f100000.watchdog: Broadcom BCM2835 watchdog timer
+[    4.009992] brcmfmac: brcmf_sdio_drivestrengthinit: No SDIO Drive strength init done for chip 43430 rev 1 pmurev 24
+[    4.027339] usbcore: registered new interface driver brcmfmac
+Initializing ran[    4.037329] brcmfmac_sdio mmc1:0001:1: Direct firmware load for brcm/brcmfmac43430-sdio.bin failed with error -2
+
+We got a ENOENT (No entry) error meaning the driver couldn't find the necessary firmwares, namely brcmfmac43430-sdio.bin
+
+RPi 3 has built in WiFi chipset, but firmwares for this broadcom chipset are not available as a package in Buildroot by default. We need to add these firmwares ourselves as a package.
+Create a folder named rpi-wifi-firmware under the package folder and add these two files to it.
+
+Config.in
+config BR2_PACKAGE_RPI_WIFI_FIRMWARE
+	bool "rpi-wifi-firmware"
+	help
+	  This package provides the wifi firmware for the Raspberry Pi
+
+rpi-wifi-firmware.mk      
+RPI_WIFI_FIRMWARE_VERSION = master
+RPI_WIFI_FIRMWARE_SITE = $(call github,RPi-Distro,firmware-nonfree,$(RPI_WIFI_FIRMWARE_VERSION))
+RPI_WIFI_FIRMWARE_LICENSE = Proprietary
+RPI_WIFI_FIRMWARE_LICENSE_FILES = brcm80211/LICENSE
+
+define RPI_WIFI_FIRMWARE_INSTALL_TARGET_CMDS
+	$(INSTALL) -D -m 0644 $(@D)/brcm80211/brcm/brcmfmac43143.bin $(TARGET_DIR)/lib/firmware/brcm/brcmfmac43143.bin
+	$(INSTALL) -D -m 0644 $(@D)/brcm80211/brcm/brcmfmac43430-sdio.bin $(TARGET_DIR)/lib/firmware/brcm/brcmfmac43430-sdio.bin
+	$(INSTALL) -D -m 0644 $(@D)/brcm80211/brcm/brcmfmac43430-sdio.txt $(TARGET_DIR)/lib/firmware/brcm/brcmfmac43430-sdio.txt
+endef
+
+$(eval $(generic-package))      
+
+Config.in adds a new config option "rpi-wifi-firmware under "Target Packages" -> "Hardware Handling" -> "Firmware"
+rpi-wifi-firmware.mk dowloads the firmware binaries and copies them to the target file system
+
+Last thing that we need to do is add this to the global package list. Add the below line under the "Firmware" menu in package/Config.in
+
+source "package/rpi-wifi-firmware/Config.in"
+
+Now select this new menu that we just added and do make. The newly built filesystem should list wlan0 when we run ifconfig -a
+
+However, we will still not be able to connect to the home WiFi network. We now need to install wpa_supplicant to help us connect to the network.
+Select "wpa_supplicant" under the "Target Packages" -> "Networking Applications" 
+
+Add the below lines in the post build script
+
+cp board/raspberrypi3/interfaces ${TARGET_DIR}/etc/network/interfaces
+cp board/raspberrypi3/wpa_supplicant.conf ${TARGET_DIR}/etc/wpa_supplicant.conf
+
+board/raspberrypi3/interfaces
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+        pre-up /etc/network/nfs_check
+        wait-delay 15
+
+auto wlan0
+iface wlan0 inet dhcp
+        pre-up wpa_supplicant -B -Dwext -iwlan0 -c/etc/wpa_supplicant.conf
+        post-down killall -q wpa_supplicant
+        wait-delay 15
+
+iface default inet dhcp
+
+Here the auto will make sure that wlan0 is started when ifup -a is run(this is done from the init scripts).
+
+board/raspberrypi3/wpa_supplicant.conf
+network={
+    ssid="SSID"
+    psk="PASSWORD"
+}
+
+Please change the SSID and PASSWORD accordingly. Now do make once again and enjoy the WiFi
+
