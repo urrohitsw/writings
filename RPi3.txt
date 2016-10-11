@@ -1,0 +1,78 @@
+This post shows how to build a basic wireless router on a custom Linux system built using buildroot.
+
+This builds on my previous post on how to get the WiFi working on Raspberry Pi3. I would recommend you to first go through them, if
+you haven't done already. I had referred this article, so it is equally helpful. However, the board used by that author is an older RPi which doesn't
+have a built in WiFi support and hence he uses a USB WiFi dongle. There fore there is need for him to install additional drivers. On a RPi3, one
+doesn't need any additional drivers.
+
+Hence we can directly start with installing all the necessary packages.
+
+Run make menuconfig and select Target Packages -> Show packages that are also provided by Busybox . Some of the packages that we will be using are
+provided by busybox and if this option is not selected, necessary packages will not appear in the package list. Now select dhcp, hostapd, iptables and all their
+subpackages. Also install iw from the same list of packages as this will help in debugging.
+
+Run the freshly minted filesystem, check whether you driver supports Access Point (AP) interface or not by running iw list. Under the supported
+interfaces AP should be listed. (RPi3's brcm drivers support AP, what's the harm in checking.) Now bring up the wireless interface by running
+
+           ifconfig wlan0 up 192.168.2.1 netmask 255.255.255.0
+
+           Update the /etc/dhcp/dhcpd.conf file. Comment the following lines as shown
+
+           #option domain-name "example.org";
+#option domain-name-servers ns1.example.org, ns2.example.org;
+
+           Also uncomment the following line as shown
+
+           authoritative;
+
+           Add the following lines to the end of the file
+
+           subnet 192.168.2.0 netmask 255.255.255.0 {
+  range 192.168.2.10 192.168.2.50;
+  option broadcast-address 192.168.2.255;
+  option routers 192.168.2.1;
+  default-lease-time 600;
+  max-lease-time 7200;
+  option domain-name "local";
+  option domain-name-servers 8.8.8.8, 8.8.4.4;
+}
+
+Most of the terms used above are self explainatory.
+
+Now run dhcpd with the following command
+dhcpd -cf /etc/dhcp/dhcpd.conf
+
+Create a hostapd.conf file or edit the existing one and add the below lines
+
+interface=wlan0
+driver=nl80211
+ssid=PiFi
+hw_mode=g
+channel=6
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=2
+wpa_passphrase=raspberry
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP
+rsn_pairwise=CCMP
+
+Run hostapd
+hostapd -B /etc/hostapd/hostapd.conf
+
+The driver parameter above has to be changed if you are using USB WiFi adapters. After running the above command, the network PiFi will be listed on
+all your devices. Use the password raspberry and connect to it. At this point, if we use PiFi, the devices will not be connecting to internet.
+
+echo 1 > /proc/sys/net/ipv4/ip_forward
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+iptables -A FORWARD -i eth0 -o wlan0 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A FORWARD -i wlan0 -o eth0 -j ACCEPT
+
+The first command above enables IP Forwarding. The second one specifies the packet matching table to be used and enables IP Masquerading for the
+ethernet packets. The third and fourth commands result in the incoming and outgoing packets being forwarded.
+
+After the above commands are run, one should be able to access the internet.
+
+In a country like India where there are fequent power interruptions this RPi3 can now be used as a WiFi router. However, I observed one drawback with
+the network thus obtained, I was not able to connect my laptop to this network. But that's a problem for another time. 
